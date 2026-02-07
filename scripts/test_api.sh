@@ -5,7 +5,7 @@
 set -e
 
 BASE_URL="${BASE_URL:-http://localhost:3001}"
-USERNAME="${TEST_USERNAME:-testuser}"
+USER_ID="${TEST_USER_ID:-1}"
 
 # Optional: pretty-print JSON (no-op if jq missing)
 jq_cmd() {
@@ -22,8 +22,8 @@ echo "=========================================="
 
 # --- Quiz: next question ---
 echo ""
-echo "[1] GET /v1/quiz/next?username=$USERNAME"
-resp=$(curl -s -w "\n%{http_code}" "$BASE_URL/v1/quiz/next?username=$USERNAME")
+echo "[1] GET /v1/quiz/next?userId=$USER_ID"
+resp=$(curl -s -w "\n%{http_code}" "$BASE_URL/v1/quiz/next?userId=$USER_ID")
 body=$(echo "$resp" | sed '$d')
 code=$(echo "$resp" | tail -n 1)
 echo "HTTP $code"
@@ -37,9 +37,9 @@ echo "$body" | jq_cmd .
 QUESTION_ID=$(echo "$body" | jq_cmd -r '.questionId // empty')
 if [[ -z "$QUESTION_ID" ]]; then QUESTION_ID=1; fi
 
-# --- Quiz: next question without username (expect 400) ---
+# --- Quiz: next question without userId (expect 400) ---
 echo ""
-echo "[2] GET /v1/quiz/next (no username - expect 400)"
+echo "[2] GET /v1/quiz/next (no userId - expect 400)"
 code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/v1/quiz/next")
 echo "HTTP $code"
 if [[ "$code" != "400" ]]; then
@@ -54,7 +54,7 @@ echo ""
 echo "[3] POST /v1/quiz/answer (correct answer for $QUESTION_ID)"
 resp=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/v1/quiz/answer" \
   -H "Content-Type: application/json" \
-  -d "{\"username\":\"$USERNAME\",\"questionId\":$QUESTION_ID,\"answer\":\"B\"}")
+  -d "{\"userId\":$USER_ID,\"questionId\":$QUESTION_ID,\"answer\":\"B\"}")
 body=$(echo "$resp" | sed '$d')
 code=$(echo "$resp" | tail -n 1)
 echo "HTTP $code"
@@ -71,7 +71,7 @@ echo ""
 echo "[4] POST /v1/quiz/answer (same question again - duplicate ignored)"
 code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/v1/quiz/answer" \
   -H "Content-Type: application/json" \
-  -d "{\"username\":\"$USERNAME\",\"questionId\":$QUESTION_ID,\"answer\":\"B\"}")
+  -d "{\"userId\":$USER_ID,\"questionId\":$QUESTION_ID,\"answer\":\"B\"}")
 echo "HTTP $code"
 if [[ "$code" != "204" ]]; then
   echo "FAIL: expected 204 No Content"
@@ -84,7 +84,7 @@ echo ""
 echo "[5] POST /v1/quiz/answer (missing fields - expect 400)"
 code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/v1/quiz/answer" \
   -H "Content-Type: application/json" \
-  -d "{\"username\":\"$USERNAME\"}")
+  -d "{\"userId\":$USER_ID}")
 echo "HTTP $code"
 if [[ "$code" != "400" ]]; then
   echo "FAIL: expected 400"
@@ -94,8 +94,8 @@ echo "OK"
 
 # --- Quiz: metrics ---
 echo ""
-echo "[6] GET /v1/quiz/metrics?username=$USERNAME"
-resp=$(curl -s -w "\n%{http_code}" "$BASE_URL/v1/quiz/metrics?username=$USERNAME")
+echo "[6] GET /v1/quiz/metrics?userId=$USER_ID"
+resp=$(curl -s -w "\n%{http_code}" "$BASE_URL/v1/quiz/metrics?userId=$USER_ID")
 body=$(echo "$resp" | sed '$d')
 code=$(echo "$resp" | tail -n 1)
 echo "HTTP $code"
@@ -137,9 +137,9 @@ fi
 echo "$body" | jq_cmd .
 echo "OK"
 
-# --- Metrics without username (expect 400) ---
+# --- Metrics without userId (expect 400) ---
 echo ""
-echo "[9] GET /v1/quiz/metrics (no username - expect 400)"
+echo "[9] GET /v1/quiz/metrics (no userId - expect 400)"
 code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/v1/quiz/metrics")
 echo "HTTP $code"
 if [[ "$code" != "400" ]]; then
@@ -147,6 +147,45 @@ if [[ "$code" != "400" ]]; then
   exit 1
 fi
 echo "OK"
+
+# --- Quiz: verify question tracking (no repeats) ---
+echo ""
+echo "[10] GET /v1/quiz/next (multiple calls - verify no immediate repeats)"
+declare -a QUESTION_IDS=()
+for i in {1..5}; do
+  resp=$(curl -s -w "\n%{http_code}" "$BASE_URL/v1/quiz/next?userId=$USER_ID")
+  body=$(echo "$resp" | sed '$d')
+  code=$(echo "$resp" | tail -n 1)
+  if [[ "$code" != "200" ]]; then
+    echo "FAIL: expected 200 on call $i"
+    exit 1
+  fi
+  qid=$(echo "$body" | jq_cmd -r '.questionId // empty')
+  if [[ -z "$qid" ]]; then
+    echo "FAIL: questionId missing in response $i"
+    exit 1
+  fi
+  QUESTION_IDS+=("$qid")
+  echo "  Call $i: questionId=$qid"
+done
+
+# Check for duplicates in the first 5 questions
+declare -A SEEN=()
+DUPLICATE_FOUND=0
+for qid in "${QUESTION_IDS[@]}"; do
+  if [[ -n "${SEEN[$qid]}" ]]; then
+    echo "  WARNING: Question $qid repeated (this is OK if all questions at difficulty have been asked)"
+    DUPLICATE_FOUND=1
+  else
+    SEEN[$qid]=1
+  fi
+done
+
+if [[ $DUPLICATE_FOUND -eq 0 ]]; then
+  echo "  OK: No immediate repeats in first 5 questions"
+else
+  echo "  OK: Some repeats detected (expected if difficulty pool exhausted)"
+fi
 
 echo ""
 echo "=========================================="

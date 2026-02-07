@@ -19,7 +19,8 @@ func main() {
 	userRepo := NewUserRepository(DB)
 	leaderboardRepo := NewLeaderboardRepository(RedisClient)
 	lastAnswerRepo := NewLastAnswerRepository(RedisClient)
-	quizService := NewQuizService(userRepo, leaderboardRepo, lastAnswerRepo)
+	userCacheRepo := NewUserCacheRepository(RedisClient)
+	quizService := NewQuizService(userRepo, leaderboardRepo, lastAnswerRepo, userCacheRepo)
 	quizHandlers := NewQuizHandlers(quizService)
 
 	// 4. Create a new Fiber instance

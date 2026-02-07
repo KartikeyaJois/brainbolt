@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -18,20 +20,35 @@ func NewQuizHandlers(service *QuizService) *QuizHandlers {
 }
 
 // HandleNextQuestion handles GET /v1/quiz/next
-// Query params: username (required)
+// Query params: userId (required)
 func (h *QuizHandlers) HandleNextQuestion(c *fiber.Ctx) error {
-	username := c.Query("username")
-	if username == "" {
+	userIDStr := c.Query("userId")
+	if userIDStr == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "username query parameter is required",
+			"error": "userId query parameter is required",
 		})
 	}
 
-	question, currentDifficulty, err := h.service.GetNextQuestionForUser(username)
+	userID, err := strconv.Atoi(userIDStr)
 	if err != nil {
-		log.Printf("Error getting next question: %v", err)
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "userId must be a valid integer",
+		})
+	}
+
+	question, currentDifficulty, err := h.service.GetNextQuestionForUser(userID)
+	if err != nil {
+		log.Printf("Error getting next question for userID %d: %v", userID, err)
+		// Check if it's a user not found error
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": fmt.Sprintf("User with ID %d not found", userID),
+			})
+		}
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to get next question",
+			"error":   "Failed to get next question",
+			"details": errMsg,
 		})
 	}
 
@@ -41,14 +58,14 @@ func (h *QuizHandlers) HandleNextQuestion(c *fiber.Ctx) error {
 		"question":          question.Question,
 		"options":           question.Options,
 		"currentDifficulty": currentDifficulty,
-		"username":          username,
+		"userId":            userID,
 	})
 }
 
 // HandleSubmitAnswer handles POST /v1/quiz/answer
 func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 	var req struct {
-		Username   string `json:"username"`
+		UserID     int    `json:"userId"`
 		QuestionID int    `json:"questionId"`
 		Answer     string `json:"answer"`
 	}
@@ -59,13 +76,13 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.Username == "" || req.QuestionID == 0 || req.Answer == "" {
+	if req.UserID == 0 || req.QuestionID == 0 || req.Answer == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "username, questionId, and answer are required",
+			"error": "userId, questionId, and answer are required",
 		})
 	}
 
-	isCorrect, user, err := h.service.SubmitAnswer(req.Username, req.QuestionID, req.Answer)
+	isCorrect, user, err := h.service.SubmitAnswer(req.UserID, req.QuestionID, req.Answer)
 	if err != nil {
 		if err == ErrDuplicateAnswer {
 			return c.SendStatus(fiber.StatusNoContent) // duplicate — ignore, no body
@@ -77,8 +94,8 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 	}
 
 	// Get user ranks
-	scoreRank, _ := h.service.GetUserRankByScore(req.Username)
-	streakRank, _ := h.service.GetUserRankByStreak(req.Username)
+	scoreRank, _ := h.service.GetUserRankByScore(req.UserID)
+	streakRank, _ := h.service.GetUserRankByStreak(req.UserID)
 
 	return c.JSON(fiber.Map{
 		"correct":               isCorrect,
@@ -92,14 +109,21 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 
 // HandleGetMetrics handles GET /v1/quiz/metrics
 func (h *QuizHandlers) HandleGetMetrics(c *fiber.Ctx) error {
-	username := c.Query("username")
-	if username == "" {
+	userIDStr := c.Query("userId")
+	if userIDStr == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "username query parameter is required",
+			"error": "userId query parameter is required",
 		})
 	}
 
-	user, err := h.service.GetUserMetrics(username)
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "userId must be a valid integer",
+		})
+	}
+
+	user, err := h.service.GetUserMetrics(userID)
 	if err != nil {
 		log.Printf("Error getting user metrics: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

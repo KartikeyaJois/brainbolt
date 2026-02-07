@@ -1,8 +1,10 @@
 package main
 
 import (
-	"database/sql"
 	"log"
+	"math/rand"
+	"sync"
+	"time"
 )
 
 // QuizService handles business logic for the quiz system
@@ -10,15 +12,34 @@ type QuizService struct {
 	userRepo        *UserRepository
 	leaderboardRepo *LeaderboardRepository
 	lastAnswerRepo  *LastAnswerRepository
+	userCacheRepo   *UserCacheRepository
 }
 
 // NewQuizService creates a new quiz service
-func NewQuizService(userRepo *UserRepository, leaderboardRepo *LeaderboardRepository, lastAnswerRepo *LastAnswerRepository) *QuizService {
+func NewQuizService(userRepo *UserRepository, leaderboardRepo *LeaderboardRepository, lastAnswerRepo *LastAnswerRepository, userCacheRepo *UserCacheRepository) *QuizService {
 	return &QuizService{
 		userRepo:        userRepo,
 		leaderboardRepo: leaderboardRepo,
 		lastAnswerRepo:  lastAnswerRepo,
+		userCacheRepo:   userCacheRepo,
 	}
+}
+
+// GetUserFromCacheOrDB returns the user from cache first, then DB; on DB hit populates cache. Use this wherever user data is needed.
+func (s *QuizService) GetUserFromCacheOrDB(userID int) (*User, error) {
+	if s.userCacheRepo != nil {
+		if user, err := s.userCacheRepo.Get(userID); err == nil && user != nil {
+			return user, nil
+		}
+	}
+	user, err := s.userRepo.GetUserByID(userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.userCacheRepo != nil {
+		_ = s.userCacheRepo.Set(userID, user)
+	}
+	return user, nil
 }
 
 // AdjustDifficulty adjusts the difficulty based on whether the last answer was correct
@@ -38,26 +59,40 @@ func (s *QuizService) AdjustDifficulty(currentDifficulty int, lastAnswerCorrect 
 	return 1
 }
 
-// GetOrCreateUser gets a user or creates a new one if they don't exist
-func (s *QuizService) GetOrCreateUser(username string) (*User, error) {
-	user, err := s.userRepo.GetUser(username)
-	if err == nil {
-		return user, nil
+// CalculateScore computes the score delta for a correct answer based on difficulty,
+// current streak, and overall accuracy. Pass the already-updated user stats (after
+// TotalAnswered, TotalCorrect, and Streak have been updated for this answer).
+func (s *QuizService) CalculateScore(difficulty int, streak, totalCorrect, totalAnswered int) int64 {
+	baseScore := int64(difficulty * 10)
+
+	streakMultiplier := 1.0
+	if streak > 0 {
+		streakMultiplier = 1.0 + float64(streak)*0.1
+		if streakMultiplier > 2.0 {
+			streakMultiplier = 2.0
+		}
 	}
 
-	if err == sql.ErrNoRows {
-		// User doesn't exist, create a new one
-		return s.userRepo.CreateUser(username)
+	accuracy := 0.0
+	if totalAnswered > 0 {
+		accuracy = float64(totalCorrect) / float64(totalAnswered)
 	}
+	accuracyMultiplier := 0.5 + (accuracy * 1.0)
 
-	return nil, err
+	return int64(float64(baseScore) * streakMultiplier * accuracyMultiplier)
+}
+
+// GetUserByID gets a user by ID (cache first, then DB)
+func (s *QuizService) GetUserByID(userID int) (*User, error) {
+	return s.GetUserFromCacheOrDB(userID)
 }
 
 // GetNextQuestionForUser gets the next question for a user.
 // Difficulty is already updated when the user submits an answer (SubmitAnswer).
-func (s *QuizService) GetNextQuestionForUser(username string) (*Question, int, error) {
-	// Get or create user
-	user, err := s.GetOrCreateUser(username)
+// Ensures the question hasn't been asked to this user before.
+func (s *QuizService) GetNextQuestionForUser(userID int) (*Question, int, error) {
+	// Get user
+	user, err := s.GetUserByID(userID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -68,22 +103,58 @@ func (s *QuizService) GetNextQuestionForUser(username string) (*Question, int, e
 		currentDifficulty = 1
 	}
 
-	// Get the next question
-	question := GetNextQuestionForUser(currentDifficulty)
+	// Get questions already asked to this user
+	askedQuestions, err := s.userRepo.GetAskedQuestionIDs(userID)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	return &question, currentDifficulty, nil
+	// Get all questions for this difficulty level
+	questions, exists := QuestionPool[currentDifficulty]
+	if !exists || len(questions) == 0 {
+		// Fallback to difficulty 1 if no questions at current difficulty
+		questions = QuestionPool[1]
+		if len(questions) == 0 {
+			return nil, 0, ErrQuestionNotFound
+		}
+		currentDifficulty = 1
+	}
+
+	// Filter out questions already asked
+	availableQuestions := make([]Question, 0)
+	for _, q := range questions {
+		if !askedQuestions[q.ID] {
+			availableQuestions = append(availableQuestions, q)
+		}
+	}
+
+	// If all questions at this difficulty have been asked, use all questions (allow repeats)
+	if len(availableQuestions) == 0 {
+		availableQuestions = questions
+	}
+
+	// Pick a random question from available ones
+	selectedQuestion := availableQuestions[rand.Intn(len(availableQuestions))]
+
+	// Record that this question was asked to this user
+	if err := s.userRepo.RecordQuestionAsked(userID, selectedQuestion.ID); err != nil {
+		log.Printf("Failed to record question asked for userID %d, questionID %d: %v", userID, selectedQuestion.ID, err)
+		// Continue anyway - don't fail the request
+	}
+
+	return &selectedQuestion, currentDifficulty, nil
 }
 
 // SubmitAnswer processes an answer submission and updates user stats
-func (s *QuizService) SubmitAnswer(username string, questionID int, answer string) (bool, *User, error) {
+func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (bool, *User, error) {
 	// Get user
-	user, err := s.GetOrCreateUser(username)
+	user, err := s.GetUserByID(userID)
 	if err != nil {
 		return false, nil, err
 	}
 
 	// Duplicate: same question as last answered — ignore (no processing, handler returns 204)
-	if lastQ, found, err := s.lastAnswerRepo.GetLastAnsweredQuestionID(username); err == nil && found && lastQ == questionID {
+	if lastQ, found, err := s.lastAnswerRepo.GetLastAnsweredQuestionID(userID); err == nil && found && lastQ == questionID {
 		return false, nil, ErrDuplicateAnswer
 	}
 	// On Redis error we continue and process
@@ -112,16 +183,7 @@ func (s *QuizService) SubmitAnswer(username string, questionID int, answer strin
 
 	scoreDelta := int64(0)
 	if isCorrect {
-		// Base score = difficulty * 10, with streak multiplier (capped at 2x)
-		baseScore := int64(correctQuestion.Difficulty * 10)
-		streakMultiplier := 1.0
-		if user.Streak > 0 {
-			streakMultiplier = 1.0 + float64(user.Streak)*0.1
-			if streakMultiplier > 2.0 {
-				streakMultiplier = 2.0
-			}
-		}
-		scoreDelta = int64(float64(baseScore) * streakMultiplier)
+		scoreDelta = s.CalculateScore(correctQuestion.Difficulty, user.Streak, user.TotalCorrect, user.TotalAnswered)
 		user.Score += scoreDelta
 	}
 
@@ -131,34 +193,44 @@ func (s *QuizService) SubmitAnswer(username string, questionID int, answer strin
 
 	// Store last answer result
 	user.LastAnswerCorrect = &isCorrect
+	now := time.Now()
+	user.LastAnsweredAt = &now
 
 	// Update user in database
-	if err := s.userRepo.UpdateUserAfterAnswer(username, user); err != nil {
+	if err := s.userRepo.UpdateUserAfterAnswer(userID, user); err != nil {
 		return false, nil, err
 	}
 
-	// Store last answered question ID in Redis (duplicate submit of same question will be ignored)
-	if err := s.lastAnswerRepo.SetLastAnsweredQuestionID(username, questionID); err != nil {
-		log.Printf("Failed to set last answered question in Redis for %s: %v", username, err)
+	// Cache user after answer (TTL 1 day)
+	if s.userCacheRepo != nil {
+		_ = s.userCacheRepo.Set(userID, user)
 	}
 
-	// Update Redis ZSets (async/non-blocking - don't fail if Redis is down)
+	// Store last answered question ID in Redis (duplicate submit of same question will be ignored)
+	if err := s.lastAnswerRepo.SetLastAnsweredQuestionID(userID, questionID); err != nil {
+		log.Printf("Failed to set last answered question in Redis for userID %d: %v", userID, err)
+	}
+
+	// Update Redis ZSets in a goroutine; wait only for this request's update (no global lock)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		if err := s.leaderboardRepo.UpdateScore(username, user.Score); err != nil {
-			// Log error but don't fail the request
-			// In production, you might want to use a proper logger
+		defer wg.Done()
+		if err := s.leaderboardRepo.UpdateScore(userID, user.Score); err != nil {
+			log.Printf("Leaderboard UpdateScore failed for userID %d: %v", userID, err)
 		}
-		if err := s.leaderboardRepo.UpdateStreak(username, user.MaxStreak); err != nil {
-			// Log error but don't fail the request
+		if err := s.leaderboardRepo.UpdateStreak(userID, user.MaxStreak); err != nil {
+			log.Printf("Leaderboard UpdateStreak failed for userID %d: %v", userID, err)
 		}
 	}()
+	wg.Wait()
 
 	return isCorrect, user, nil
 }
 
 // GetUserMetrics retrieves user metrics
-func (s *QuizService) GetUserMetrics(username string) (*User, error) {
-	return s.GetOrCreateUser(username)
+func (s *QuizService) GetUserMetrics(userID int) (*User, error) {
+	return s.GetUserByID(userID)
 }
 
 // GetLeaderboardByScore gets the leaderboard by score
@@ -169,14 +241,23 @@ func (s *QuizService) GetLeaderboardByScore(limit int) ([]User, error) {
 		return s.userRepo.GetLeaderboardByScore(limit)
 	}
 
-	// Fetch full user data from DB for each entry
-	users := make([]User, 0, len(entries))
-	for _, entry := range entries {
-		user, err := s.userRepo.GetUser(entry.Username)
-		if err != nil {
-			continue // Skip if user not found
+	// Batch fetch user IDs from entries
+	userIDs := make([]int, len(entries))
+	for i, entry := range entries {
+		userIDs[i] = entry.UserID
+	}
+
+	// Fetch users from DB in batch
+	users, err := s.userRepo.GetUsersByIDs(userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the fetched users
+	if s.userCacheRepo != nil {
+		for i := range users {
+			_ = s.userCacheRepo.Set(users[i].ID, &users[i])
 		}
-		users = append(users, *user)
 	}
 
 	return users, nil
@@ -190,42 +271,52 @@ func (s *QuizService) GetLeaderboardByStreak(limit int) ([]User, error) {
 		return s.userRepo.GetLeaderboardByStreak(limit)
 	}
 
-	users := make([]User, 0, len(entries))
-	for _, entry := range entries {
-		user, err := s.userRepo.GetUser(entry.Username)
-		if err != nil {
-			continue
+	// Batch fetch user IDs from entries
+	userIDs := make([]int, len(entries))
+	for i, entry := range entries {
+		userIDs[i] = entry.UserID
+	}
+
+	// Fetch users from DB in batch
+	users, err := s.userRepo.GetUsersByIDs(userIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the fetched users
+	if s.userCacheRepo != nil {
+		for i := range users {
+			_ = s.userCacheRepo.Set(users[i].ID, &users[i])
 		}
-		users = append(users, *user)
 	}
 
 	return users, nil
 }
 
 // GetUserRankByScore gets user's rank by score
-func (s *QuizService) GetUserRankByScore(username string) (int, error) {
-	rank, err := s.leaderboardRepo.GetUserRankByScore(username)
+func (s *QuizService) GetUserRankByScore(userID int) (int, error) {
+	rank, err := s.leaderboardRepo.GetUserRankByScore(userID)
 	if err != nil {
 		// Fallback to database if Redis fails
-		return s.userRepo.GetUserRankByScore(username)
+		return s.userRepo.GetUserRankByScore(userID)
 	}
 	if rank == 0 {
 		// User not in Redis, try database
-		return s.userRepo.GetUserRankByScore(username)
+		return s.userRepo.GetUserRankByScore(userID)
 	}
 	return int(rank), nil
 }
 
 // GetUserRankByStreak gets user's rank by streak
-func (s *QuizService) GetUserRankByStreak(username string) (int, error) {
-	rank, err := s.leaderboardRepo.GetUserRankByStreak(username)
+func (s *QuizService) GetUserRankByStreak(userID int) (int, error) {
+	rank, err := s.leaderboardRepo.GetUserRankByStreak(userID)
 	if err != nil {
 		// Fallback to database if Redis fails
-		return s.userRepo.GetUserRankByStreak(username)
+		return s.userRepo.GetUserRankByStreak(userID)
 	}
 	if rank == 0 {
 		// User not in Redis, try database
-		return s.userRepo.GetUserRankByStreak(username)
+		return s.userRepo.GetUserRankByStreak(userID)
 	}
 	return int(rank), nil
 }
