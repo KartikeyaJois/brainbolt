@@ -2,8 +2,10 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 )
@@ -34,6 +36,20 @@ func main() {
 
 	// 6. Route Definitions
 	api := app.Group("/v1/quiz")
+	// Per-user rate limiting: extract userId from body for POST /answer, then limit by user (or IP fallback)
+	api.Use(BodyUserIDMiddleware)
+	api.Use(limiter.New(limiter.Config{
+		Max:        100,
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return RateLimitKeyByUser(c)
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error": "Too many requests. Please try again later.",
+			})
+		},
+	}))
 	api.Get("/next", quizHandlers.HandleNextQuestion)
 	api.Post("/answer", quizHandlers.HandleSubmitAnswer)
 	api.Get("/metrics", quizHandlers.HandleGetMetrics)

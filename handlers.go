@@ -159,7 +159,7 @@ func (h *QuizHandlers) HandleGetScoreBoard(c *fiber.Ctx) error {
 		limit = 100 // Cap at 100
 	}
 
-	users, err := h.service.GetLeaderboardByScore(limit)
+	entries, err := h.service.GetLeaderboardEntriesByScore(limit)
 	if err != nil {
 		log.Printf("Error getting score leaderboard: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -167,9 +167,7 @@ func (h *QuizHandlers) HandleGetScoreBoard(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"leaderboard": users,
-	})
+	return c.JSON(entries)
 }
 
 // HandleGetStreakBoard handles GET /v1/leaderboard/streak
@@ -183,7 +181,7 @@ func (h *QuizHandlers) HandleGetStreakBoard(c *fiber.Ctx) error {
 		limit = 100 // Cap at 100
 	}
 
-	users, err := h.service.GetLeaderboardByStreak(limit)
+	entries, err := h.service.GetLeaderboardEntriesByStreak(limit)
 	if err != nil {
 		log.Printf("Error getting streak leaderboard: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -191,7 +189,5 @@ func (h *QuizHandlers) HandleGetStreakBoard(c *fiber.Ctx) error {
 		})
 	}
 
-	return c.JSON(fiber.Map{
-		"leaderboard": users,
-	})
+	return c.JSON(entries)
 }

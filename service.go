@@ -271,64 +271,42 @@ func (s *QuizService) GetUserMetrics(userID int) (*User, error) {
 	return s.GetUserByID(userID)
 }
 
-// GetLeaderboardByScore gets the leaderboard by score
-func (s *QuizService) GetLeaderboardByScore(limit int) ([]User, error) {
+// GetLeaderboardEntriesByScore returns leaderboard entries (userId, score, rank) from Redis only; no user fetch.
+func (s *QuizService) GetLeaderboardEntriesByScore(limit int) ([]LeaderboardEntry, error) {
 	entries, err := s.leaderboardRepo.GetTopByScore(int64(limit))
 	if err != nil {
-		// Fallback to database if Redis fails
-		return s.userRepo.GetLeaderboardByScore(limit)
-	}
-
-	// Batch fetch user IDs from entries
-	userIDs := make([]int, len(entries))
-	for i, entry := range entries {
-		userIDs[i] = entry.UserID
-	}
-
-	// Fetch users from DB in batch
-	users, err := s.userRepo.GetUsersByIDs(userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the fetched users
-	if s.userCacheRepo != nil {
-		for i := range users {
-			_ = s.userCacheRepo.Set(users[i].ID, &users[i])
+		users, err2 := s.userRepo.GetLeaderboardByScore(limit)
+		if err2 != nil {
+			return nil, err
 		}
+		entries = make([]LeaderboardEntry, len(users))
+		for i, u := range users {
+			entries[i] = LeaderboardEntry{UserID: u.ID, Score: u.Score, Rank: int64(i + 1)}
+		}
+		return entries, nil
 	}
-
-	return users, nil
+	return entries, nil
 }
 
-// GetLeaderboardByStreak gets the leaderboard by streak
-func (s *QuizService) GetLeaderboardByStreak(limit int) ([]User, error) {
+// GetLeaderboardEntriesByStreak returns streak leaderboard entries (userId, streak, rank); no user fetch.
+func (s *QuizService) GetLeaderboardEntriesByStreak(limit int) ([]StreakLeaderboardEntry, error) {
 	entries, err := s.leaderboardRepo.GetTopByStreak(int64(limit))
 	if err != nil {
-		// Fallback to database if Redis fails
-		return s.userRepo.GetLeaderboardByStreak(limit)
-	}
-
-	// Batch fetch user IDs from entries
-	userIDs := make([]int, len(entries))
-	for i, entry := range entries {
-		userIDs[i] = entry.UserID
-	}
-
-	// Fetch users from DB in batch
-	users, err := s.userRepo.GetUsersByIDs(userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the fetched users
-	if s.userCacheRepo != nil {
-		for i := range users {
-			_ = s.userCacheRepo.Set(users[i].ID, &users[i])
+		users, err2 := s.userRepo.GetLeaderboardByStreak(limit)
+		if err2 != nil {
+			return nil, err
 		}
+		out := make([]StreakLeaderboardEntry, len(users))
+		for i, u := range users {
+			out[i] = StreakLeaderboardEntry{UserID: u.ID, Streak: u.MaxStreak, Rank: int64(i + 1)}
+		}
+		return out, nil
 	}
-
-	return users, nil
+	out := make([]StreakLeaderboardEntry, len(entries))
+	for i, e := range entries {
+		out[i] = StreakLeaderboardEntry{UserID: e.UserID, Streak: int(e.Score), Rank: e.Rank}
+	}
+	return out, nil
 }
 
 // GetUserRankByScore gets user's rank by score

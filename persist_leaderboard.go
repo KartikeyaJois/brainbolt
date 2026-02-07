@@ -12,10 +12,17 @@ const (
 	LeaderboardStreakKey = "leaderboard:streak"
 )
 
-// LeaderboardEntry represents a leaderboard entry
+// LeaderboardEntry represents a score leaderboard entry
 type LeaderboardEntry struct {
 	UserID int   `json:"userId"`
-	Score  int64 `json:"score"` // For streak leaderboard, this is max_streak
+	Score  int64 `json:"score"`
+	Rank   int64 `json:"rank"`
+}
+
+// StreakLeaderboardEntry represents a streak leaderboard entry (max_streak, not score)
+type StreakLeaderboardEntry struct {
+	UserID int   `json:"userId"`
+	Streak int   `json:"streak"`
 	Rank   int64 `json:"rank"`
 }
 
@@ -36,7 +43,7 @@ func NewLeaderboardRepository(client *redis.Client) *LeaderboardRepository {
 // UpdateScore updates user's score in the score leaderboard ZSet
 func (r *LeaderboardRepository) UpdateScore(userID int, score int64) error {
 	return r.client.ZAdd(r.ctx, LeaderboardScoreKey, redis.Z{
-		Score:  float64(score), // ZSet uses float64 for scores
+		Score:  float64(score),       // ZSet uses float64 for scores
 		Member: strconv.Itoa(userID), // Store userID as stringified integer
 	}).Err()
 }
@@ -57,20 +64,25 @@ func (r *LeaderboardRepository) GetTopByScore(limit int64) ([]LeaderboardEntry, 
 		return nil, err
 	}
 
-	entries := make([]LeaderboardEntry, len(results))
-	for i, result := range results {
-		userIDStr := result.Member.(string)
+	var entries []LeaderboardEntry
+	for _, result := range results {
+		userIDStr, ok := result.Member.(string)
+		if !ok {
+			continue
+		}
 		userID, err := strconv.Atoi(userIDStr)
 		if err != nil {
-			continue // Skip invalid entries
+			continue
 		}
-		entries[i] = LeaderboardEntry{
+		entries = append(entries, LeaderboardEntry{
 			UserID: userID,
-			Score:   int64(result.Score),
-			Rank:   int64(i) + 1, // 1-indexed rank
-		}
+			Score:  int64(result.Score),
+			Rank:   0, // set below
+		})
 	}
-
+	for i := range entries {
+		entries[i].Rank = int64(i) + 1
+	}
 	return entries, nil
 }
 
@@ -81,20 +93,25 @@ func (r *LeaderboardRepository) GetTopByStreak(limit int64) ([]LeaderboardEntry,
 		return nil, err
 	}
 
-	entries := make([]LeaderboardEntry, len(results))
-	for i, result := range results {
-		userIDStr := result.Member.(string)
+	var entries []LeaderboardEntry
+	for _, result := range results {
+		userIDStr, ok := result.Member.(string)
+		if !ok {
+			continue
+		}
 		userID, err := strconv.Atoi(userIDStr)
 		if err != nil {
-			continue // Skip invalid entries
+			continue
 		}
-		entries[i] = LeaderboardEntry{
+		entries = append(entries, LeaderboardEntry{
 			UserID: userID,
 			Score:  int64(result.Score), // This is actually max_streak
-			Rank:   int64(i) + 1,
-		}
+			Rank:   0,                   // set below
+		})
 	}
-
+	for i := range entries {
+		entries[i].Rank = int64(i) + 1
+	}
 	return entries, nil
 }
 
