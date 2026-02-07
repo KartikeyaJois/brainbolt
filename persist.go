@@ -17,24 +17,20 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 // GetUserByID retrieves a user by id
 func (r *UserRepository) GetUserByID(id int) (*User, error) {
 	var user User
-	var lastAnswerCorrect sql.NullBool
 	var lastAnsweredAt sql.NullTime
 	query := `SELECT id, username, score, streak, max_streak, total_correct, total_answered, 
-	          COALESCE(current_difficulty, 0) as current_difficulty, last_answer_correct, last_answered_at 
+	          COALESCE(current_difficulty, 0) as current_difficulty, last_answered_at 
 	          FROM users WHERE id = ?`
 
 	err := r.db.QueryRow(query, id).Scan(
 		&user.ID, &user.Username, &user.Score, &user.Streak, &user.MaxStreak,
-		&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnswerCorrect, &lastAnsweredAt,
+		&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnsweredAt,
 	)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if lastAnswerCorrect.Valid {
-		user.LastAnswerCorrect = &lastAnswerCorrect.Bool
-	}
 	if lastAnsweredAt.Valid {
 		user.LastAnsweredAt = &lastAnsweredAt.Time
 	}
@@ -75,30 +71,30 @@ func (r *UserRepository) UpdateUserDifficulty(userID int, difficulty int) error 
 	return err
 }
 
+// UpdateUserStreak updates only the current streak (e.g. after time-based decay).
+func (r *UserRepository) UpdateUserStreak(userID int, streak int) error {
+	query := `UPDATE users SET streak = ? WHERE id = ?`
+	_, err := r.db.Exec(query, streak, userID)
+	return err
+}
+
 // UpdateUserAfterAnswer updates user stats after answering a question
 func (r *UserRepository) UpdateUserAfterAnswer(userID int, user *User) error {
 	query := `UPDATE users SET 
 	          score = ?, streak = ?, max_streak = ?, total_correct = ?, 
-	          total_answered = ?, current_difficulty = ?, last_answer_correct = ?, last_answered_at = ? 
+	          total_answered = ?, current_difficulty = ?, last_answered_at = ? 
 	          WHERE id = ?`
-
-	var lastAnswerCorrect interface{}
-	if user.LastAnswerCorrect != nil {
-		lastAnswerCorrect = *user.LastAnswerCorrect
-	} else {
-		lastAnswerCorrect = nil
-	}
 
 	_, err := r.db.Exec(query, user.Score, user.Streak, user.MaxStreak,
 		user.TotalCorrect, user.TotalAnswered, user.CurrentDifficulty,
-		lastAnswerCorrect, user.LastAnsweredAt, userID)
+		user.LastAnsweredAt, userID)
 	return err
 }
 
 // GetLeaderboardByScore returns top N users by score
 func (r *UserRepository) GetLeaderboardByScore(limit int) ([]User, error) {
 	query := `SELECT id, username, score, streak, max_streak, total_correct, total_answered, 
-	          COALESCE(current_difficulty, 0) as current_difficulty, last_answer_correct, last_answered_at 
+	          COALESCE(current_difficulty, 0) as current_difficulty, last_answered_at 
 	          FROM users ORDER BY score DESC LIMIT ?`
 
 	rows, err := r.db.Query(query, limit)
@@ -110,17 +106,13 @@ func (r *UserRepository) GetLeaderboardByScore(limit int) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
-		var lastAnswerCorrect sql.NullBool
 		var lastAnsweredAt sql.NullTime
 		err := rows.Scan(
 			&user.ID, &user.Username, &user.Score, &user.Streak, &user.MaxStreak,
-			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnswerCorrect, &lastAnsweredAt,
+			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnsweredAt,
 		)
 		if err != nil {
 			return nil, err
-		}
-		if lastAnswerCorrect.Valid {
-			user.LastAnswerCorrect = &lastAnswerCorrect.Bool
 		}
 		if lastAnsweredAt.Valid {
 			user.LastAnsweredAt = &lastAnsweredAt.Time
@@ -134,7 +126,7 @@ func (r *UserRepository) GetLeaderboardByScore(limit int) ([]User, error) {
 // GetLeaderboardByStreak returns top N users by max streak
 func (r *UserRepository) GetLeaderboardByStreak(limit int) ([]User, error) {
 	query := `SELECT id, username, score, streak, max_streak, total_correct, total_answered, 
-	          COALESCE(current_difficulty, 0) as current_difficulty, last_answer_correct, last_answered_at 
+	          COALESCE(current_difficulty, 0) as current_difficulty, last_answered_at 
 	          FROM users ORDER BY max_streak DESC LIMIT ?`
 
 	rows, err := r.db.Query(query, limit)
@@ -146,17 +138,13 @@ func (r *UserRepository) GetLeaderboardByStreak(limit int) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
-		var lastAnswerCorrect sql.NullBool
 		var lastAnsweredAt sql.NullTime
 		err := rows.Scan(
 			&user.ID, &user.Username, &user.Score, &user.Streak, &user.MaxStreak,
-			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnswerCorrect, &lastAnsweredAt,
+			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnsweredAt,
 		)
 		if err != nil {
 			return nil, err
-		}
-		if lastAnswerCorrect.Valid {
-			user.LastAnswerCorrect = &lastAnswerCorrect.Bool
 		}
 		if lastAnsweredAt.Valid {
 			user.LastAnsweredAt = &lastAnsweredAt.Time
@@ -229,7 +217,7 @@ func (r *UserRepository) GetUsersByIDs(ids []int) ([]User, error) {
 	}
 
 	query := `SELECT id, username, score, streak, max_streak, total_correct, total_answered, 
-	          COALESCE(current_difficulty, 0) as current_difficulty, last_answer_correct, last_answered_at 
+	          COALESCE(current_difficulty, 0) as current_difficulty, last_answered_at 
 	          FROM users WHERE id IN (` + placeholders + `)`
 
 	rows, err := r.db.Query(query, args...)
@@ -241,17 +229,13 @@ func (r *UserRepository) GetUsersByIDs(ids []int) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var user User
-		var lastAnswerCorrect sql.NullBool
 		var lastAnsweredAt sql.NullTime
 		err := rows.Scan(
 			&user.ID, &user.Username, &user.Score, &user.Streak, &user.MaxStreak,
-			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnswerCorrect, &lastAnsweredAt,
+			&user.TotalCorrect, &user.TotalAnswered, &user.CurrentDifficulty, &lastAnsweredAt,
 		)
 		if err != nil {
 			return nil, err
-		}
-		if lastAnswerCorrect.Valid {
-			user.LastAnswerCorrect = &lastAnswerCorrect.Bool
 		}
 		if lastAnsweredAt.Valid {
 			user.LastAnsweredAt = &lastAnsweredAt.Time

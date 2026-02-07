@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// StreakDecayWindow is the time after which streak starts degrading (e.g. lose 1 per full window since last answer).
+const StreakDecayWindow = 24 * time.Hour
+
 // QuizService handles business logic for the quiz system
 type QuizService struct {
 	userRepo        *UserRepository
@@ -25,16 +28,45 @@ func NewQuizService(userRepo *UserRepository, leaderboardRepo *LeaderboardReposi
 	}
 }
 
+// applyStreakDecay reduces user.Streak based on time since LastAnsweredAt (1 per full StreakDecayWindow). Returns true if streak was changed.
+func (s *QuizService) applyStreakDecay(user *User) bool {
+	if user.LastAnsweredAt == nil {
+		return false
+	}
+	elapsed := time.Since(*user.LastAnsweredAt)
+	if elapsed < StreakDecayWindow {
+		return false
+	}
+	periods := int(elapsed / StreakDecayWindow)
+	newStreak := user.Streak - periods
+	if newStreak < 0 {
+		newStreak = 0
+	}
+	if newStreak == user.Streak {
+		return false
+	}
+	user.Streak = newStreak
+	return true
+}
+
 // GetUserFromCacheOrDB returns the user from cache first, then DB; on DB hit populates cache. Use this wherever user data is needed.
+// Applies streak decay based on time since last answer; persists and updates cache if streak was decayed.
 func (s *QuizService) GetUserFromCacheOrDB(userID int) (*User, error) {
 	if s.userCacheRepo != nil {
 		if user, err := s.userCacheRepo.Get(userID); err == nil && user != nil {
+			if s.applyStreakDecay(user) {
+				_ = s.userRepo.UpdateUserStreak(userID, user.Streak)
+				_ = s.userCacheRepo.Set(userID, user)
+			}
 			return user, nil
 		}
 	}
 	user, err := s.userRepo.GetUserByID(userID)
 	if err != nil {
 		return nil, err
+	}
+	if s.applyStreakDecay(user) {
+		_ = s.userRepo.UpdateUserStreak(userID, user.Streak)
 	}
 	if s.userCacheRepo != nil {
 		_ = s.userCacheRepo.Set(userID, user)
@@ -153,6 +185,14 @@ func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (b
 		return false, nil, err
 	}
 
+	// Apply streak decay based on time since last answer before we update stats or calculate score
+	if s.applyStreakDecay(user) {
+		_ = s.userRepo.UpdateUserStreak(userID, user.Streak)
+		if s.userCacheRepo != nil {
+			_ = s.userCacheRepo.Set(userID, user)
+		}
+	}
+
 	// Duplicate: same question as last answered — ignore (no processing, handler returns 204)
 	if lastQ, found, err := s.lastAnswerRepo.GetLastAnsweredQuestionID(userID); err == nil && found && lastQ == questionID {
 		return false, nil, ErrDuplicateAnswer
@@ -191,8 +231,6 @@ func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (b
 	newDifficulty := s.AdjustDifficulty(user.CurrentDifficulty, isCorrect)
 	user.CurrentDifficulty = newDifficulty
 
-	// Store last answer result
-	user.LastAnswerCorrect = &isCorrect
 	now := time.Now()
 	user.LastAnsweredAt = &now
 
