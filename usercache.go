@@ -54,3 +54,15 @@ func (r *UserCacheRepository) Set(userID int, user *User) error {
 	}
 	return r.client.Set(r.ctx, key, data, userCacheTTL).Err()
 }
+
+// QueueSet queues SET for the user cache; call Exec on the pipeline to run.
+// Returns an error only if JSON marshaling fails (that command is not queued).
+func (r *UserCacheRepository) QueueSet(pipe *redis.Pipeline, userID int, user *User) error {
+	key := userCacheKeyPrefix + strconv.Itoa(userID)
+	data, err := json.Marshal(user)
+	if err != nil {
+		return err
+	}
+	pipe.Set(r.ctx, key, data, userCacheTTL)
+	return nil
+}

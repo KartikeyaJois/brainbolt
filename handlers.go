@@ -5,6 +5,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -93,9 +94,19 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 		})
 	}
 
-	// Get user ranks
-	scoreRank, _ := h.service.GetUserRankByScore(req.UserID)
-	streakRank, _ := h.service.GetUserRankByStreak(req.UserID)
+	// Get user ranks in parallel
+	var scoreRank, streakRank int
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		scoreRank, _ = h.service.GetUserRankByScore(req.UserID)
+	}()
+	go func() {
+		defer wg.Done()
+		streakRank, _ = h.service.GetUserRankByStreak(req.UserID)
+	}()
+	wg.Wait()
 
 	return c.JSON(fiber.Map{
 		"correct":               isCorrect,

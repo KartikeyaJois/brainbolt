@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"math/rand"
 	"sync"
@@ -123,22 +124,33 @@ func (s *QuizService) GetUserByID(userID int) (*User, error) {
 // Difficulty is already updated when the user submits an answer (SubmitAnswer).
 // Ensures the question hasn't been asked to this user before.
 func (s *QuizService) GetNextQuestionForUser(userID int) (*Question, int, error) {
-	// Get user
-	user, err := s.GetUserByID(userID)
-	if err != nil {
-		return nil, 0, err
+	// Get user and asked questions in parallel (both only need userID)
+	var user *User
+	var userErr error
+	var askedQuestions map[int]bool
+	var askedErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		user, userErr = s.GetUserByID(userID)
+	}()
+	go func() {
+		defer wg.Done()
+		askedQuestions, askedErr = s.userRepo.GetAskedQuestionIDs(userID)
+	}()
+	wg.Wait()
+	if userErr != nil {
+		return nil, 0, userErr
+	}
+	if askedErr != nil {
+		return nil, 0, askedErr
 	}
 
 	// Use stored difficulty (updated in SubmitAnswer); first question starts at 1
 	currentDifficulty := user.CurrentDifficulty
 	if currentDifficulty == 0 {
 		currentDifficulty = 1
-	}
-
-	// Get questions already asked to this user
-	askedQuestions, err := s.userRepo.GetAskedQuestionIDs(userID)
-	if err != nil {
-		return nil, 0, err
 	}
 
 	// Get all questions for this difficulty level
@@ -179,10 +191,25 @@ func (s *QuizService) GetNextQuestionForUser(userID int) (*Question, int, error)
 
 // SubmitAnswer processes an answer submission and updates user stats
 func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (bool, *User, error) {
-	// Get user
-	user, err := s.GetUserByID(userID)
-	if err != nil {
-		return false, nil, err
+	// Get user and last-answered question in parallel (both only need userID)
+	var user *User
+	var userErr error
+	var lastQ int
+	var lastFound bool
+	var lastErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		user, userErr = s.GetUserByID(userID)
+	}()
+	go func() {
+		defer wg.Done()
+		lastQ, lastFound, lastErr = s.lastAnswerRepo.GetLastAnsweredQuestionID(userID)
+	}()
+	wg.Wait()
+	if userErr != nil {
+		return false, nil, userErr
 	}
 
 	// Apply streak decay based on time since last answer before we update stats or calculate score
@@ -194,7 +221,7 @@ func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (b
 	}
 
 	// Duplicate: same question as last answered — ignore (no processing, handler returns 204)
-	if lastQ, found, err := s.lastAnswerRepo.GetLastAnsweredQuestionID(userID); err == nil && found && lastQ == questionID {
+	if lastErr == nil && lastFound && lastQ == questionID {
 		return false, nil, ErrDuplicateAnswer
 	}
 	// On Redis error we continue and process
@@ -234,34 +261,24 @@ func (s *QuizService) SubmitAnswer(userID int, questionID int, answer string) (b
 	now := time.Now()
 	user.LastAnsweredAt = &now
 
-	// Update user in database
+	// Update user in database (must succeed before we update Redis)
 	if err := s.userRepo.UpdateUserAfterAnswer(userID, user); err != nil {
 		return false, nil, err
 	}
 
-	// Cache user after answer (TTL 1 day)
+	// Batch all Redis updates in one pipeline (one round-trip)
+	pipe := s.leaderboardRepo.Pipeline()
 	if s.userCacheRepo != nil {
-		_ = s.userCacheRepo.Set(userID, user)
-	}
-
-	// Store last answered question ID in Redis (duplicate submit of same question will be ignored)
-	if err := s.lastAnswerRepo.SetLastAnsweredQuestionID(userID, questionID); err != nil {
-		log.Printf("Failed to set last answered question in Redis for userID %d: %v", userID, err)
-	}
-
-	// Update Redis ZSets in a goroutine; wait only for this request's update (no global lock)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := s.leaderboardRepo.UpdateScore(userID, user.Score); err != nil {
-			log.Printf("Leaderboard UpdateScore failed for userID %d: %v", userID, err)
+		if err := s.userCacheRepo.QueueSet(pipe, userID, user); err != nil {
+			log.Printf("Failed to queue user cache set for userID %d: %v", userID, err)
 		}
-		if err := s.leaderboardRepo.UpdateStreak(userID, user.MaxStreak); err != nil {
-			log.Printf("Leaderboard UpdateStreak failed for userID %d: %v", userID, err)
-		}
-	}()
-	wg.Wait()
+	}
+	s.lastAnswerRepo.QueueSetLastAnswered(pipe, userID, questionID)
+	s.leaderboardRepo.QueueUpdateScore(pipe, userID, user.Score)
+	s.leaderboardRepo.QueueUpdateStreak(pipe, userID, user.MaxStreak)
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		log.Printf("Redis pipeline Exec failed for userID %d: %v", userID, err)
+	}
 
 	return isCorrect, user, nil
 }

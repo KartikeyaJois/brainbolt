@@ -56,6 +56,27 @@ func (r *LeaderboardRepository) UpdateStreak(userID int, maxStreak int) error {
 	}).Err()
 }
 
+// Pipeline returns a new pipeline for batching Redis commands (one round-trip).
+func (r *LeaderboardRepository) Pipeline() *redis.Pipeline {
+	return r.client.Pipeline().(*redis.Pipeline)
+}
+
+// QueueUpdateScore queues ZADD for the score leaderboard; call Exec on the pipeline to run.
+func (r *LeaderboardRepository) QueueUpdateScore(pipe *redis.Pipeline, userID int, score int64) {
+	pipe.ZAdd(r.ctx, LeaderboardScoreKey, redis.Z{
+		Score:  float64(score),
+		Member: strconv.Itoa(userID),
+	})
+}
+
+// QueueUpdateStreak queues ZADD for the streak leaderboard; call Exec on the pipeline to run.
+func (r *LeaderboardRepository) QueueUpdateStreak(pipe *redis.Pipeline, userID int, maxStreak int) {
+	pipe.ZAdd(r.ctx, LeaderboardStreakKey, redis.Z{
+		Score:  float64(maxStreak),
+		Member: strconv.Itoa(userID),
+	})
+}
+
 // GetTopByScore returns top N users by score
 func (r *LeaderboardRepository) GetTopByScore(limit int64) ([]LeaderboardEntry, error) {
 	// ZREVRANGE returns highest to lowest (descending order)

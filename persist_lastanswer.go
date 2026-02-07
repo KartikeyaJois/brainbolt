@@ -49,3 +49,9 @@ func (r *LastAnswerRepository) SetLastAnsweredQuestionID(userID int, questionID 
 	key := lastAnswerKeyPrefix + strconv.Itoa(userID)
 	return r.client.Set(r.ctx, key, strconv.Itoa(questionID), lastAnswerTTL).Err()
 }
+
+// QueueSetLastAnswered queues SET for the last-answered question; call Exec on the pipeline to run.
+func (r *LastAnswerRepository) QueueSetLastAnswered(pipe *redis.Pipeline, userID int, questionID int) {
+	key := lastAnswerKeyPrefix + strconv.Itoa(userID)
+	pipe.Set(r.ctx, key, strconv.Itoa(questionID), lastAnswerTTL)
+}
