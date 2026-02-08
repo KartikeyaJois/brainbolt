@@ -1,43 +1,6 @@
 # ⚡ BrainBolt
 
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go)](https://go.dev/)
-[![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker)](https://www.docker.com/)
-[![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?style=for-the-badge&logo=mysql)](https://www.mysql.com/)
-[![Redis](https://img.shields.io/badge/Redis-7.x-DC382D?style=for-the-badge&logo=redis)](https://redis.io/)
-
-BrainBolt is a high-performance, containerized quiz game backend designed for ultra-low latency and high concurrency. Built with **Go (Fiber)**, **MySQL**, and **Redis**, it features real-time leaderboards, question tracking, and robust rate limiting.
-
----
-
-## 🏗 Architecture
-
-```mermaid
-graph TD
-    Client[📱 Client / Load Test] -->|REST API| Fiber[⚡ Go Fiber App]
-    Fiber -->|Relational Data| MySQL[(🗄 MySQL)]
-    Fiber -->|Leaderboards & Cache| Redis[(🚀 Redis)]
-    
-    subgraph "Docker Environment"
-    Fiber
-    MySQL
-    Redis
-    end
-```
-
----
-
-## 🚀 Key Features
-
-*   **⚡ Ultra-Fast API**: Built on the Fiber framework for minimal overhead.
-*   **📊 Real-time Leaderboards**: Powered by Redis Sorted Sets for instant `O(log(N))` updates and retrieval.
-*   **🧠 Intelligent Quiz Engine**: Tracks user progress and ensures variety in question delivery.
-*   **🛡️ Built-in Rate Limiting**: Per-user rate limiting to prevent abuse and ensure fair play.
-*   **🐳 One-Command Setup**: Fully containerized environment with automated database seeding.
-*   **📈 Integrated Load Testing**: Custom shell-based load tester to measure `time_starttransfer` (server processing time).
-
----
-
-## 🏁 Getting Started
+##  Getting Started
 
 ### Prerequisites
 
@@ -45,8 +8,7 @@ graph TD
 *   [curl](https://curl.se/) & [jq](https://jqlang.github.io/jq/) (for testing)
 
 ### Launching the Stack
-
-Fire up the entire infrastructure with a single command:
+use the following command:
 
 ```bash
 docker-compose up --build
@@ -59,7 +21,7 @@ docker-compose up --build
 
 ---
 
-## 🧪 Testing & Validation
+##  Testing & Validation
 
 ### 1. Functional API Tests
 Verify all endpoints (next question, answer submission, leaderboard, metrics) are working correctly:
@@ -83,7 +45,7 @@ Simulate real-world traffic to measure performance and latency:
 
 ---
 
-## 📂 Project Structure
+##  Project Structure
 
 ```text
 ├── cmd/brainbolt/      # Application entry point
@@ -99,7 +61,7 @@ Simulate real-world traffic to measure performance and latency:
 
 ---
 
-## ⚙️ Configuration
+## ️ Configuration
 
 Environment variables can be adjusted in `docker-compose.yml` for the application, or `scripts/loadtest_config.env` for the load test runner.
 
@@ -107,9 +69,3 @@ Environment variables can be adjusted in `docker-compose.yml` for the applicatio
 ```bash
 mysql -h 127.0.0.1 -P 3307 -u root -proot brainbolt
 ```
-
----
-
-<p align="center">
-  Developed with ❤️ by the BrainBolt Team
-</p>
