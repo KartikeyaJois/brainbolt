@@ -12,12 +12,25 @@ import (
 
 // QuizHandlers contains HTTP handlers for quiz endpoints
 type QuizHandlers struct {
-	service *QuizService
+	userService        *UserService
+	questionService    *QuestionService
+	answerService      *AnswerService
+	leaderboardService *LeaderboardService
 }
 
 // NewQuizHandlers creates a new quiz handlers instance
-func NewQuizHandlers(service *QuizService) *QuizHandlers {
-	return &QuizHandlers{service: service}
+func NewQuizHandlers(
+	userService *UserService,
+	questionService *QuestionService,
+	answerService *AnswerService,
+	leaderboardService *LeaderboardService,
+) *QuizHandlers {
+	return &QuizHandlers{
+		userService:        userService,
+		questionService:    questionService,
+		answerService:      answerService,
+		leaderboardService: leaderboardService,
+	}
 }
 
 // HandleNextQuestion handles GET /v1/quiz/next
@@ -37,7 +50,7 @@ func (h *QuizHandlers) HandleNextQuestion(c *fiber.Ctx) error {
 		})
 	}
 
-	question, currentDifficulty, err := h.service.GetNextQuestionForUser(userID)
+	question, currentDifficulty, err := h.questionService.GetNextQuestionForUser(userID)
 	if err != nil {
 		log.Printf("Error getting next question for userID %d: %v", userID, err)
 		// Check if it's a user not found error
@@ -83,7 +96,7 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 		})
 	}
 
-	isCorrect, user, err := h.service.SubmitAnswer(req.UserID, req.QuestionID, req.Answer)
+	isCorrect, user, err := h.answerService.SubmitAnswer(req.UserID, req.QuestionID, req.Answer)
 	if err != nil {
 		if err == ErrDuplicateAnswer {
 			return c.SendStatus(fiber.StatusNoContent) // duplicate — ignore, no body
@@ -100,11 +113,11 @@ func (h *QuizHandlers) HandleSubmitAnswer(c *fiber.Ctx) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		scoreRank, _ = h.service.GetUserRankByScore(req.UserID)
+		scoreRank, _ = h.leaderboardService.GetUserRankByScore(req.UserID)
 	}()
 	go func() {
 		defer wg.Done()
-		streakRank, _ = h.service.GetUserRankByStreak(req.UserID)
+		streakRank, _ = h.leaderboardService.GetUserRankByStreak(req.UserID)
 	}()
 	wg.Wait()
 
@@ -134,7 +147,7 @@ func (h *QuizHandlers) HandleGetMetrics(c *fiber.Ctx) error {
 		})
 	}
 
-	user, err := h.service.GetUserMetrics(userID)
+	user, err := h.userService.GetUserMetrics(userID)
 	if err != nil {
 		log.Printf("Error getting user metrics: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -170,7 +183,7 @@ func (h *QuizHandlers) HandleGetScoreBoard(c *fiber.Ctx) error {
 		limit = 100 // Cap at 100
 	}
 
-	entries, err := h.service.GetLeaderboardEntriesByScore(limit)
+	entries, err := h.leaderboardService.GetLeaderboardEntriesByScore(limit)
 	if err != nil {
 		log.Printf("Error getting score leaderboard: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
@@ -192,7 +205,7 @@ func (h *QuizHandlers) HandleGetStreakBoard(c *fiber.Ctx) error {
 		limit = 100 // Cap at 100
 	}
 
-	entries, err := h.service.GetLeaderboardEntriesByStreak(limit)
+	entries, err := h.leaderboardService.GetLeaderboardEntriesByStreak(limit)
 	if err != nil {
 		log.Printf("Error getting streak leaderboard: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

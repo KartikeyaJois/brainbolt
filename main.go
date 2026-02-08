@@ -14,16 +14,17 @@ func main() {
 	// 1. Initialize our external connections
 	InitDatabases()
 
-	// 2. Load our questions into memory for fast access
-	SeedQuestions()
-
-	// 3. Initialize handlers (service and repository layers)
+	// 2. Initialize repos, services, and handlers
 	userRepo := NewUserRepository(DB)
+	questionRepo := NewQuestionRepository(DB)
 	leaderboardRepo := NewLeaderboardRepository(RedisClient)
 	lastAnswerRepo := NewLastAnswerRepository(RedisClient)
 	userCacheRepo := NewUserCacheRepository(RedisClient)
-	quizService := NewQuizService(userRepo, leaderboardRepo, lastAnswerRepo, userCacheRepo)
-	quizHandlers := NewQuizHandlers(quizService)
+	userService := NewUserService(userRepo, userCacheRepo)
+	questionService := NewQuestionService(questionRepo, userRepo, userService)
+	answerService := NewAnswerService(userService, questionRepo, lastAnswerRepo, userRepo, leaderboardRepo, userCacheRepo)
+	leaderboardService := NewLeaderboardService(userRepo, leaderboardRepo)
+	quizHandlers := NewQuizHandlers(userService, questionService, answerService, leaderboardService)
 
 	// 4. Create a new Fiber instance
 	app := fiber.New(fiber.Config{

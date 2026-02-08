@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -36,9 +38,19 @@ func InitDatabases() {
 		log.Fatalf("Failed to open database connection: %v", err)
 	}
 
-	// Test the connection
-	if err := DB.Ping(); err != nil {
-		log.Fatalf("Failed to ping database: %v", err)
+	// Test the connection with retries
+	maxRetries := 10
+	for i := 1; i <= maxRetries; i++ {
+		err = DB.Ping()
+		if err == nil {
+			break
+		}
+		log.Printf("Waiting for MySQL... (%d/%d)", i, maxRetries)
+		time.Sleep(3 * time.Second)
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to connect to MySQL after %d attempts: %v", maxRetries, err)
 	}
 
 	// Set connection pool settings
@@ -59,10 +71,19 @@ func InitDatabases() {
 		DB:       0,
 	})
 
-	// Test Redis connection
+	// Test Redis connection with retries
 	ctx := context.Background()
-	if err := RedisClient.Ping(ctx).Err(); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+	for i := 1; i <= maxRetries; i++ {
+		err = RedisClient.Ping(ctx).Err()
+		if err == nil {
+			break
+		}
+		log.Printf("Waiting for Redis... (%d/%d)", i, maxRetries)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis after %d attempts: %v", maxRetries, err)
 	}
 
 	log.Println("Successfully connected to Redis")

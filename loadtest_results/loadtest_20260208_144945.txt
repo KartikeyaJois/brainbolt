@@ -1,0 +1,19 @@
+==========================================
+BrainBolt Load Test Results
+==========================================
+Timestamp: 20260208_144945
+Duration: 60s | Users: 10
+Total requests:      564
+Successful (2xx): 564 | Errors: 0 (0.00%)
+Throughput: 9.4 req/s
+RPM (requests/min): 564
+Latency (ms): p50=432 p95=858 p99=1200
+------------------------------------------
+CPU/Memory: not measured by this script. Run server under top/ps or your monitoring and correlate with RPM above.
+
+Per-endpoint counts:
+ 215 answer
+ 188 next
+  83 metrics
+  40 leaderboard_streak
+  38 leaderboard_score
