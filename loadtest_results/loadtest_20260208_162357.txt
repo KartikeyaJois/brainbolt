@@ -1,0 +1,12 @@
+==========================================
+BrainBolt Load Test Results (App Latency)
+==========================================
+Note: Latency now uses curl's %{time_starttransfer},
+which mimics the time taken by the server to respond.
+------------------------------------------
+Duration: 30s | Users: 10
+Total requests:      412
+Successful: 412 | Errors: 0 (0.00%)
+Throughput: 13.7 req/s
+Latency (ms): p50=6 p95=14 p99=27
+------------------------------------------

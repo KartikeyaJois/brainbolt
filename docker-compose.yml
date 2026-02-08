@@ -8,6 +8,7 @@ services:
     volumes:
       - ./scripts/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
       - ./scripts/create_questions_table.sql:/docker-entrypoint-initdb.d/02-questions.sql
+      - ./scripts/seed_loadtest_users.sql:/docker-entrypoint-initdb.d/03-users.sql
       - mysql-data:/var/lib/mysql
     ports:
       - "3307:3306"
